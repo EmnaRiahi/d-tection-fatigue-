@@ -1,0 +1,25 @@
+# Fichier de configuration secret
+config.py
+
+# Logs de session (données sensibles)
+logs/
+
+# Fichiers inutiles Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Environnement virtuel
+venv/
+env/
+.venv/
+
+# Fichiers système Windows / Mac
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
