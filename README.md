@@ -136,4 +136,6 @@ DELAI_EMAIL        = 60     # Anti-spam email (secondes)
 
 ## 📝 Licence
 
-Projet personnel — libre d'utilisation et de modification.
+
+bech y5dem 
+venv\Scripts\activate 

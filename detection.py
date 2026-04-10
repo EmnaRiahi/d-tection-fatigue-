@@ -6,6 +6,8 @@ import pygame
 import csv
 import os
 import smtplib
+import json
+import urllib.request
 from email.mime.text import MIMEText
 from datetime import datetime
 from config import GMAIL_EXPEDITEUR, GMAIL_MOT_PASSE, GMAIL_DESTINATAIRE
@@ -23,6 +25,31 @@ LOG_FILE = os.path.join(LOG_DIR, f"session_{datetime.now().strftime('%Y%m%d_%H%M
 with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
     writer = csv.writer(f)
     writer.writerow(["Horodatage", "Type_Alerte", "EAR", "MAR", "Angle", "Duree_s"])
+
+BACKEND_URL = "http://localhost:5000/api/driver-alerts"
+
+def envoyer_alerte_backend(type_alerte, ear, mar, angle, duree):
+    # TETE_AVANT is not in the schema, skip it
+    if type_alerte not in ['YEUX_FERMES', 'BAILLEMENT', 'TETE_PENCHEE']:
+        return
+    try:
+        payload = json.dumps({
+            "alert_type": type_alerte,
+            "ear":        round(ear, 3),
+            "mar":        round(mar, 3),
+            "angle":      round(angle, 1),
+            "duration_s": round(duree, 1),
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            BACKEND_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        urllib.request.urlopen(req, timeout=3)
+        print(f"[Backend] Alert sent: {type_alerte}")
+    except Exception as e:
+        print(f"[Backend] Failed to send alert: {e}")
 
 def log_alerte(type_alerte, ear, mar, angle, duree):
     with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
@@ -303,6 +330,7 @@ while True:
                 if duree_yeux >= SEUIL_TEMPS_YEUX:
                     compteur_alertes += 1
                     log_alerte("YEUX_FERMES", ear_moyen, mar, angle, duree_yeux)
+                    envoyer_alerte_backend("YEUX_FERMES", ear_moyen, mar, angle, duree_yeux)
                     if not alarme_active:
                         pygame.mixer.music.play(-1)
                         alarme_active = True
@@ -325,6 +353,7 @@ while True:
                 if duree_bouche >= SEUIL_TEMPS_BOUCHE:
                     compteur_alertes += 1
                     log_alerte("BAILLEMENT", ear_moyen, mar, angle, duree_bouche)
+                    envoyer_alerte_backend("BAILLEMENT", ear_moyen, mar, angle, duree_bouche)
                     if not alarme_active:
                         pygame.mixer.music.play(-1)
                         alarme_active = True
@@ -348,6 +377,7 @@ while True:
                 if duree_tete >= SEUIL_TEMPS_TETE:
                     compteur_alertes += 1
                     log_alerte("TETE_PENCHEE", ear_moyen, mar, angle, duree_tete)
+                    envoyer_alerte_backend("TETE_PENCHEE", ear_moyen, mar, angle, duree_tete)
                     if not alarme_active:
                         pygame.mixer.music.play(-1)
                         alarme_active = True
