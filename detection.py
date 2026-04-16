@@ -59,7 +59,16 @@ def distance(p1, p2):
 # --- INITIALISATION IA ---
 mp_face = mp.solutions.face_mesh
 detecteur = mp_face.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.7) # Confiance augmentée
-camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+# --- NOUVEAU CODE (ESP32-CAM) ---
+# 1. Remplace l'adresse IP ci-dessous par celle de TON ESP32
+url_esp32 = "http://10.15.246.74" 
+
+print(f"🔗 Connexion au flux ESP32-CAM : {url_esp32}")
+camera = cv2.VideoCapture(url_esp32)
+
+# 2. OPTIMISATION : Supprimer le retard (Lag)
+# On dit à OpenCV de ne pas garder d'images en mémoire tampon
+camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
 temps_danger = None
 alarme_active = False
