@@ -7,6 +7,7 @@ import os
 import json
 import urllib.request
 import threading
+from datetime import datetime
 
 # --- INITIALISATION ---
 pygame.mixer.init()
@@ -27,17 +28,17 @@ def envoyer_alerte_backend(type_alerte, ear, mar, angle, duree):
         threading.Thread(target=_async_backend, args=(payload,), daemon=True).start()
     except: pass
 
-# --- RÉGLAGES DE STABILITÉ (CORRECTION BEUG) ---
-SEUIL_EAR = 0.20        # Descendu de 0.22 à 0.20 (moins de fausses alertes yeux)
-SEUIL_YAW = 0.08        # Augmenté (plus de liberté gauche/droite)
-SEUIL_PITCH = 0.08      # Augmenté (plus de liberté haut/bas)
-TIME_LIMIT = 1.8        # Un peu plus long pour confirmer le vrai danger
-SMOOTH_FACTOR = 0.5     # Pour lisser les mouvements brusques
+# --- RÉGLAGES TECHNIQUE S.A.V.E.S ---
+SEUIL_EAR = 0.21        
+SEUIL_YAW = 0.08        
+SEUIL_PITCH = 0.08      
+TIME_LIMIT = 1.5        
 
-# Couleurs
+# Couleurs BGR
 NOIR, BLANC, ROUGE, VERT, ORANGE, GRIS, CYAN = (0,0,0), (255,255,255), (0,0,255), (0,255,0), (0,165,255), (100,100,100), (255,255,0)
 BLEU_FONCE = (50, 50, 50)
 
+# --- FONCTIONS INTERFACE ---
 def dessiner_panneau(image, titre, valeur, statut, x, y):
     cv2.rectangle(image, (x, y), (x + 200, y + 60), BLEU_FONCE, -1)
     cv2.rectangle(image, (x, y), (x + 200, y + 60), GRIS, 1)
@@ -58,29 +59,36 @@ def distance(p1, p2):
 
 # --- INITIALISATION IA ---
 mp_face = mp.solutions.face_mesh
-detecteur = mp_face.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.7) # Confiance augmentée
-# --- NOUVEAU CODE (ESP32-CAM) ---
-# 1. Remplace l'adresse IP ci-dessous par celle de TON ESP32
-url_esp32 = "http://10.15.246.74" 
+detecteur = mp_face.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.7)
 
-print(f"🔗 Connexion au flux ESP32-CAM : {url_esp32}")
-camera = cv2.VideoCapture(url_esp32)
+# --- SÉLECTION DE LA WEBCAM USB ---
+print("🔍 Recherche de la Webcam USB...")
+# On teste l'index 1 (Webcam USB sur PC portable)
+camera = cv2.VideoCapture(1, cv2.CAP_DSHOW) 
 
-# 2. OPTIMISATION : Supprimer le retard (Lag)
-# On dit à OpenCV de ne pas garder d'images en mémoire tampon
-camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+if not camera.isOpened():
+    print("⚠️ Webcam USB non trouvée sur index 1, essai sur index 2...")
+    camera = cv2.VideoCapture(2, cv2.CAP_DSHOW)
 
+if not camera.isOpened():
+    print("❌ Aucune Webcam USB trouvée. Utilisation de la caméra par défaut (Index 0).")
+    camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+
+camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+# Variables de suivi
 temps_danger = None
 alarme_active = False
 arreter = [False]
 historique_ear = []
-yaw_prev = pitch_prev = 0
+score_fatigue = 0
 
 def clic_sur_stop(event, x, y, flags, param):
     if event == cv2.EVENT_LBUTTONDOWN and x >= 640 and y >= 430: param[0] = True
 
-cv2.namedWindow("S.A.V.E.S - Stable Monitor")
-cv2.setMouseCallback("S.A.V.E.S - Stable Monitor", clic_sur_stop, arreter)
+cv2.namedWindow("S.A.V.E.S - USB Webcam Monitor")
+cv2.setMouseCallback("S.A.V.E.S - USB Webcam Monitor", clic_sur_stop, arreter)
 
 while True:
     if arreter[0]: break
@@ -92,20 +100,20 @@ while True:
     cadre = cv2.copyMakeBorder(image, 0, 0, 0, 220, cv2.BORDER_CONSTANT, value=NOIR)
     x_panneau = w_img + 10
 
-    # UI HEADER
+    # Header Interface
     cv2.rectangle(cadre, (w_img, 0), (w_img + 220, 60), (30, 30, 30), -1)
-    cv2.putText(cadre, "S.A.V.E.S", (x_panneau + 30, 35), 0, 0.8, VERT, 2)
+    cv2.putText(cadre, "DRIVE Guard", (x_panneau, 35), 0, 0.7, VERT, 2)
 
     statut_yeux = statut_tete = "ok"
-    valeur_yeux, valeur_tete = "Ouverts", "Route"
-    danger_reel = False
+    valeur_yeux, valeur_tete = "Ouverts", "Face"
+    danger_actuel = False
 
     results = detecteur.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
     if results.multi_face_landmarks:
         p = results.multi_face_landmarks[0].landmark
         
-        # 1. EAR Lissé
+        # 1. Calcul EAR
         g = [p[i] for i in [362, 385, 387, 263, 373, 380]]
         d = [p[i] for i in [33, 160, 158, 133, 153, 144]]
         ear = ((distance(g[1], g[5]) + distance(g[2], g[4])) / (2.0 * distance(g[0], g[3])) + 
@@ -114,55 +122,42 @@ while True:
         historique_ear.append(ear)
         if len(historique_ear) > 100: historique_ear.pop(0)
 
-        # 2. Regard avec Zone de Tolérance
+        # 2. Calcul Regard (Yaw/Pitch)
         eye_x = (p[33].x + p[263].x) / 2
         eye_y = (p[33].y + p[263].y) / 2
-        yaw = (p[4].x - eye_x)
-        pitch = (p[4].y - eye_y)
+        yaw, pitch = (p[4].x - eye_x), (p[4].y - eye_y)
 
-        # Logique de détection robuste
+        # Logique de détection
         if ear < SEUIL_EAR:
-            valeur_yeux = "FERMES"
-            danger_reel = True
+            valeur_yeux, danger_actuel = "FERMES", True
         
-        # On vérifie si on sort de la "Safe Zone" (le carré central)
         if abs(yaw) > SEUIL_YAW: 
-            valeur_tete = "GAUCHE" if yaw < 0 else "DROITE"
-            danger_reel = True
+            valeur_tete, danger_actuel = ("GAUCHE" if yaw < 0 else "DROITE"), True
         elif pitch > SEUIL_PITCH: 
-            valeur_tete = "BAS (TEL)"
-            danger_reel = True
+            valeur_tete, danger_actuel = "BAS (TEL)", True
         elif pitch < -SEUIL_PITCH:
-            valeur_tete = "HAUT"
-            danger_reel = True
+            valeur_tete, danger_actuel = "HAUT", True
 
-        # GESTION DES ALERTES (Anti-sursaut)
-        if danger_reel:
+        if danger_actuel:
             if temps_danger is None: temps_danger = time.time()
             duree = time.time() - temps_danger
-            
-            # Phase 1 : Warning visuel (Orange) après 0.5s
-            if duree > 0.5:
-                statut_yeux = statut_tete = "warning"
-            
-            # Phase 2 : Danger réel (Rouge + Son) après 1.8s
+            statut_yeux = statut_tete = "warning" if duree < 0.8 else "danger"
             if duree >= TIME_LIMIT:
-                statut_yeux = statut_tete = "danger"
                 if not alarme_active: 
                     pygame.mixer.music.play(-1)
                     alarme_active = True
-                envoyer_alerte_backend("DANGER", ear, 0, yaw, duree)
+                envoyer_alerte_backend("DANGER_DETECTE", ear, 0, yaw, duree)
         else:
             temps_danger = None
             if alarme_active:
                 pygame.mixer.music.stop()
                 alarme_active = False
 
-        score_fatigue = int(min((1 - ear/0.3) * 100 if ear < 0.28 else 0, 100))
+        score_fatigue = int(min((1 - ear/0.3) * 100 if ear < 0.3 else 0, 100))
 
-    # AFFICHAGE FINAL
+    # AFFICHAGE HUD
     dessiner_panneau(cadre, "YEUX", valeur_yeux, statut_yeux, x_panneau, 75)
-    dessiner_panneau(cadre, "REGARD", valeur_tete, statut_tete, x_panneau, 150)
+    dessiner_panneau(cadre, "ORIENTATION", valeur_tete, statut_tete, x_panneau, 150)
     dessiner_barre_fatigue(cadre, score_fatigue, x_panneau, h_img - 155)
 
     # Graphique EAR
@@ -175,7 +170,7 @@ while True:
     cv2.rectangle(cadre, (w_img, h_img - 50), (w_img + 220, h_img), ROUGE, -1)
     cv2.putText(cadre, "STOP", (x_panneau + 65, h_img - 15), 0, 0.7, BLANC, 2)
 
-    cv2.imshow("S.A.V.E.S - Full Monitoring", cadre)
+    cv2.imshow("S.A.V.E.S - USB Webcam Monitor", cadre)
     if cv2.waitKey(1) & 0xFF == ord('q'): break
 
 camera.release()
