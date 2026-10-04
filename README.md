@@ -137,5 +137,4 @@ DELAI_EMAIL        = 60     # Anti-spam email (secondes)
 ## 📝 Licence
 
 
-bech y5dem 
 venv\Scripts\activate 
